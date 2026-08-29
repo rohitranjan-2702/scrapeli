@@ -107,11 +107,6 @@ app.get("/api/profile", async (req, reply) => {
   return handleProfile(url, reply);
 });
 
-app.post("/api/profile", async (req, reply) => {
-  const { url } = (req.body ?? {}) as Record<string, unknown>;
-  return handleProfile(url, reply);
-});
-
 // ---- Lifecycle -----------------------------------------------------------
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, "shutting down");
