@@ -1,9 +1,9 @@
 # LinkedIn Profile API
 
 A hosted HTTP API that accepts a LinkedIn profile URL and returns most of the
-information on the profile as structured JSON — name, headline, location, about,
-experience, education, skills, certifications, languages, connection/follower
-counts, and profile images.
+profile as structured JSON — name, headline, location, about, experience,
+education, skills, certifications, languages, connection/follower counts, and
+profile images.
 
 Built for the "LinkedIn Profile API" hiring challenge.
 
@@ -11,53 +11,30 @@ Built for the "LinkedIn Profile API" hiring challenge.
 
 ## How it works
 
-A **pure reverse-engineered client — no browser, no Playwright, one HTTP
-request per profile.**
+A **pure reverse-engineered client — no browser, one HTTP request per profile.**
 
-linkedin.com's _desktop_ profile page is a React Server Components shell: it
-embeds no profile data at all (everything is fetched client-side after
-hydration), and the legacy `/voyager/api/.../profileView` REST endpoint now
-returns **HTTP 410**. But requesting the very same URL with a **mobile
-User-Agent** makes LinkedIn serve its server-rendered mobile template — a single
-~200 KB HTML document containing the entire profile.
+linkedin.com's desktop profile page is a React Server Components shell with no
+embedded profile data, and the legacy `/voyager/api/.../profileView` endpoint
+now returns HTTP 410. But requesting the same URL with a **mobile User-Agent**
+makes LinkedIn serve its server-rendered mobile template — a single ~200 KB HTML
+document containing the entire profile.
 
-So the whole strategy is:
+The strategy:
 
 1. **One GET** of `https://www.linkedin.com/in/<id>/` with the `li_at` session
    cookie and an iPhone `User-Agent`. Login redirects, authwall pages, 404s and
-   throttling (`429` / `999`) are detected and mapped to proper status codes.
-2. **Parse** the returned HTML with [cheerio](https://cheerio.js.org)
+   throttling (`429` / `999`) are mapped to proper status codes.
+2. **Parse** the HTML with [cheerio](https://cheerio.js.org)
    ([`parse.ts`](src/linkedin/parse.ts)). The markup is semantic, so fields are
-   selected _structurally_ rather than by position:
-
-   | Field                                       | Selector                                                          |
-   | ------------------------------------------- | ----------------------------------------------------------------- |
-   | name / headline / location                  | `h1`, `.member-current-company` and siblings                      |
-   | about                                       | `.summary-container .description`                                 |
-   | experience                                  | `li.profile-entity-lockup` → `.list-item-heading`, `.description` |
-   | grouped roles (one company, several titles) | `li.role-container` → `.body-small-bold`                          |
-   | education                                   | `li.profile-entity-lockup` under the Education `h2`               |
-   | skills                                      | `.skills-list li.skill-item`                                      |
-   | languages / certifications                  | `#accomplishment-section .accomplishment-type`                    |
-
-   Two markup quirks are handled up front: `·` separators are empty spans (the
-   glyph comes from CSS) and are materialised so adjacent fields don't
-   concatenate, and the "…more / See less" toggles are stripped so they don't
-   end up appended to every description.
-
+   selected structurally (`.description`, `.list-item-heading`,
+   `.role-container`, …) rather than by position — this is what makes grouped
+   roles at one company come out as separate entries with the right titles. Two
+   quirks are handled up front: `·` separators are empty CSS-driven spans (so
+   they're materialised) and "…more / See less" toggles are stripped.
 3. **Validate** against a [Zod schema](src/schema.ts) and return.
    `meta.warnings` surfaces anything that could not be read.
 
-```
-client ─▶ Fastify ─▶ LinkedInClient
-                       └─ GET /in/<id>/   (li_at cookie + iPhone UA)
-                                 │
-                          server-rendered HTML
-                                 │
-                          cheerio parse ─▶ Zod ─▶ JSON
-```
-
-A full scrape is **one request, ~1–2 s, a few MB of RAM** — versus ~10–20 s and
+A full scrape is one request, ~1–2 s, a few MB of RAM — versus ~10–20 s and
 ~1 GB for a headless Chromium.
 
 ## API
@@ -77,7 +54,7 @@ Base URL: your deployment's HTTPS origin.
 Every request must send `Authorization: Bearer <token>`, where `<token>` is one
 of the values in `AUTH_TOKENS`.
 
-Accepted input URLs (query-string params are ignored, locale prefixes allowed):
+Accepted input URLs (query-string params ignored, locale prefixes allowed):
 
 - `https://www.linkedin.com/in/williamhgates/`
 - `https://linkedin.com/in/williamhgates`
@@ -87,7 +64,7 @@ Accepted input URLs (query-string params are ignored, locale prefixes allowed):
 
 ```bash
 curl -s "https://YOUR_HOST/api/profile?url=https://www.linkedin.com/in/williamhgates/" \
-  -H "Authorization: Bearer $AUTH_TOKEN" | jq
+  -H "Authorization: Bearer tross_test_9f2b7c1e4a6d8035b1c9e5f7a2d4b6c8" | jq
 ```
 
 #### Response `200`
@@ -173,16 +150,22 @@ cp .env.example .env         # then edit .env — see below
 pnpm dev                     # http://localhost:3000
 ```
 
-Production build:
+Production build: `pnpm build && pnpm start`.
+
+### Docker
 
 ```bash
-pnpm build && pnpm start
+docker build -t linkedin-profile-api .
+docker run --rm -p 3000:3000 --env-file .env linkedin-profile-api
 ```
+
+The image is a multi-stage `node:22-alpine` build (~260 MB), runs as a non-root
+user, and reads all config from the container environment. `curl localhost:3000/health`.
 
 ### Configuration
 
-All configuration is via environment variables. **Secrets are never committed** —
-`.env` is git-ignored and `.env.example` documents every variable.
+All configuration is via environment variables. `.env` is git-ignored;
+`.env.example` documents every variable.
 
 | Variable              | Required | Default   | Description                                                                 |
 | --------------------- | -------- | --------- | --------------------------------------------------------------------------- |
@@ -201,79 +184,50 @@ All configuration is via environment variables. **Secrets are never committed** 
 1. Log into <https://www.linkedin.com> in a browser — **use a secondary /
    throwaway account**, not your primary one.
 2. DevTools → **Application** → **Cookies** → `https://www.linkedin.com`.
-3. Copy the **Value** of the `li_at` cookie (a long opaque string) into
-   `LINKEDIN_LI_AT`.
-4. Optionally copy `JSESSIONID` too (surrounding quotes are stripped
-   automatically).
+3. Copy the **Value** of the `li_at` cookie into `LINKEDIN_LI_AT` (optionally
+   `JSESSIONID` too — surrounding quotes are stripped automatically).
 
 The cookie is a bearer credential for that account. Treat it like a password,
 rotate it if it leaks, and expect it to last a few weeks before LinkedIn
-invalidates it (the API returns `502 linkedin_auth` when that happens).
-
----
-
-## Deployment
-
-The service is a stateless Node HTTP server that listens on `$PORT`, with no
-browser dependency — ~128 MB RAM is plenty. It runs on any Node 20+ host.
-
-### Any Node host (Render, Railway, Fly.io, a VM, …)
-
-- Build command: `pnpm install && pnpm build`
-- Start command: `pnpm start`
-- Set `LINKEDIN_LI_AT` (required) and `AUTH_TOKENS` (recommended) as
-  environment variables / secrets in the platform dashboard — never commit them.
-  `LINKEDIN_JSESSIONID` is optional.
-- Health check path: `/health`.
-
-`pnpm start` runs `node dist/index.js` and reads configuration straight from the
-process environment (it does not load `.env`), so the platform's own env-var
-mechanism is all you need. Any managed platform terminates TLS for you,
-satisfying the "HTTPS" requirement.
+invalidates it (the API then returns `502 linkedin_auth`).
 
 ---
 
 ## Design decisions
 
 - **Mobile UA over a headless browser.** The desktop page is a data-free RSC
-  shell and the old REST endpoints return 410, so a naive HTML fetch fails. The
-  mobile template is fully server-rendered, which makes the whole problem one
-  `fetch` plus a parse: ~1–2 s and a few MB, against ~10–20 s and ~1 GB for
-  Chromium. It also avoids GraphQL's rotating `queryId` hashes entirely.
-- **Structural selectors, not positional ones.** Fields are read from
-  meaningful classes (`.description`, `.list-item-heading`, `.role-container`)
-  rather than "the third div". This is what makes grouped positions — several
-  roles at one company — come out as separate entries with the right titles.
+  shell and the old REST endpoints return 410. The mobile template is fully
+  server-rendered, making the whole problem one `fetch` plus a parse (~1–2 s, a
+  few MB) instead of ~10–20 s and ~1 GB for Chromium. It also avoids GraphQL's
+  rotating `queryId` hashes entirely.
+- **Structural selectors, not positional ones.** Fields are read from meaningful
+  classes rather than "the third div", which is what makes grouped positions
+  come out correctly.
 - **Cookie auth, not username/password.** Programmatic login almost always hits
-  a CAPTCHA or e-mail verification. A `li_at` cookie sidesteps that and is
+  a CAPTCHA or e-mail verification; a `li_at` cookie sidesteps that and is
   trivial to rotate.
 - **Everything optional in the schema.** Profiles vary; partial data is the
   norm, not an error. Callers get `meta.warnings` instead of a hard failure.
-- **Only fields the page actually provides.** The schema deliberately omits
-  things this surface cannot supply (industry, country code, background image)
-  rather than returning keys that are always `null`.
+- **Only fields the page actually provides** — the schema omits things this
+  surface cannot supply (industry, country code, background image).
 
 ---
 
 ## Known limitations
 
-- **Not affiliated with LinkedIn.** This automates access to LinkedIn using your
-  own account and likely runs against LinkedIn's User Agreement. Use it for the
-  challenge / evaluation only, at low volume, with an account you're willing to
-  lose. There is no attempt to bypass paywalls or view content the account
-  can't already see.
+- **Not affiliated with LinkedIn.** This automates access using your own account
+  and likely runs against LinkedIn's User Agreement. Use it for the challenge /
+  evaluation only, at low volume, with an account you're willing to lose.
 - **Markup drift.** The parser depends on LinkedIn's mobile template markup.
-  When a class is renamed the affected field returns `null` (and a note lands in
-  `meta.warnings`) rather than throwing — but it will need occasional
-  maintenance. `INCLUDE_RAW=true` returns the fetched HTML, which makes
-  diagnosing a drift a one-request job.
-- **Bot defenses.** Datacenter IPs frequently get `429` / `999` from LinkedIn
-  even with a valid cookie; sustained use can trigger an account checkpoint. The
-  service rate-limits itself, but a residential / low-reputation IP and modest
-  volume are strongly recommended.
-- **Visibility-bound.** Fields the backing account can't see (private profiles,
-  out-of-network specifics) are simply absent. Contact info, recommendations,
-  posts/activity, volunteering, projects, honors, and courses are out of scope.
+  When a class is renamed the affected field returns `null` (with a note in
+  `meta.warnings`) rather than throwing. `INCLUDE_RAW=true` returns the fetched
+  HTML, making a drift diagnosis a one-request job.
+- **Bot defenses.** Datacenter IPs frequently get `429` / `999` even with a
+  valid cookie; a residential / low-reputation IP and modest volume are
+  strongly recommended.
+- **Visibility-bound.** Fields the backing account can't see are simply absent.
+  Contact info, recommendations, posts/activity, volunteering, projects, honors,
+  and courses are out of scope.
 - **Cookie lifetime.** `li_at` expires; expect to re-set the secret every few
   weeks. Failures return `502 linkedin_auth`.
 - **No caching.** Add one keyed by `publicIdentifier` if you need throughput.
