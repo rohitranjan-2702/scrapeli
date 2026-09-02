@@ -63,7 +63,7 @@ Accepted input URLs (query-string params ignored, locale prefixes allowed):
 #### Example
 
 ```bash
-curl -s "https://YOUR_HOST/api/profile?url=https://www.linkedin.com/in/williamhgates/" \
+curl -s "https://scrapeli.onrender.com/api/profile?url=https://www.linkedin.com/in/williamhgates/" \
   -H "Authorization: Bearer tross_test_9f2b7c1e4a6d8035b1c9e5f7a2d4b6c8" | jq
 ```
 
